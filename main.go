@@ -31,7 +31,7 @@ func WriteCommand(sock *net.UDPConn, command byte, body []byte) ([]byte, error) 
 	if err != nil {
 		return nil, err
 	}
-	buffer := make([]byte, 4096)
+	buffer := make([]byte, 1280000)
 	nBytes, _, err := sock.ReadFromUDP(buffer)
 	if err != nil {
 		return nil, err
@@ -44,12 +44,40 @@ func WriteCommand(sock *net.UDPConn, command byte, body []byte) ([]byte, error) 
 	return response[5:], nil
 }
 
-func swapByteOrder(in []byte) []byte {
-	for i := len(in)/2 - 1; i >= 0; i-- {
-		opp := len(in) - 1 - i
-		in[i], in[opp] = in[opp], in[i]
+func FindByteSequence(needle []byte, haystack []byte) (index int) {
+	if len(needle) > len(haystack) {
+		return -1
 	}
-	return in
+	var matchStart, matchLen int
+	for idx, b := range haystack {
+		switch {
+		case matchLen == len(needle):
+			return matchStart
+		case b == needle[matchLen]:
+			// continue checking
+			matchLen += 1
+		case b == needle[0]:
+			matchStart = idx
+			matchLen += 1
+		default:
+			matchLen = 0
+			matchStart = 0
+		}
+	}
+	return -1
+}
+
+func readUntilDoubleNull(in []byte) (head []byte, tail []byte) {
+	var pivot int
+	var prev byte = 0x01
+	for idx, b := range in {
+		if b == 0x00 && b == prev {
+			pivot = idx
+			break
+		}
+		prev = b
+	}
+	return in[:pivot], in[pivot:]
 }
 
 func main() {
@@ -75,8 +103,8 @@ func main() {
 			return
 		}
 		// Parse challenge token from the response
-		nonNullTerminated := string(response[:len(response)-1])
-		parsedToken, err := strconv.ParseInt(nonNullTerminated, 10, 32)
+		notNullTerminated := string(response[:len(response)-1])
+		parsedToken, err := strconv.ParseInt(notNullTerminated, 10, 32)
 		if err != nil {
 			errorPipe <- err
 			return
@@ -91,11 +119,21 @@ func main() {
 		packedToken := buf.Bytes()
 		// Must be padded with four null bytes
 		challengeResponse := append(packedToken, []byte{0x00, 0x00, 0x00, 0x00}...)
-		_, err = WriteCommand(conn, 0x00, challengeResponse)
+		response, err = WriteCommand(conn, 0x00, challengeResponse)
 		if err != nil {
 			errorPipe <- err
 			return
 		}
+		statusPayload := response[11:]
+		// k-v section
+		// Instead of just spliting on double-null, we can look for the magic delimiter bytes
+		fmt.Printf("%s\n", string(statusPayload))
+		first, rest := readUntilDoubleNull(statusPayload)
+		fmt.Printf("%s\n", string(first))
+		second, rest := readUntilDoubleNull(rest)
+		fmt.Printf("%s\n", string(second))
+		playerSection, rest := readUntilDoubleNull(rest[10:])
+		fmt.Printf("%s\n", string(playerSection))
 	}()
 
 	select {
