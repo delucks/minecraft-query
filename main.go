@@ -26,7 +26,7 @@ func WriteCommand(sock *net.UDPConn, command byte, body []byte) ([]byte, error) 
 	if body != nil {
 		fullPayload = append(fullPayload, body...)
 	}
-	fmt.Printf("Request: %v\n", fullPayload)
+	// fmt.Printf("Request: %v\n", fullPayload)
 	_, err := sock.Write(fullPayload)
 	if err != nil {
 		return nil, err
@@ -40,11 +40,11 @@ func WriteCommand(sock *net.UDPConn, command byte, body []byte) ([]byte, error) 
 	if len(response) < 5 || response[0] != command {
 		return nil, fmt.Errorf("Response %v was too short or didn't match with command %v\n", response, command)
 	}
-	fmt.Printf("Reply: %v\n", response)
+	// fmt.Printf("Reply: %v\n", response)
 	return response[5:], nil
 }
 
-func FindByteSequence(needle []byte, haystack []byte) (index int) {
+func FindByteSequence(needle []byte, haystack []byte) int {
 	if len(needle) > len(haystack) {
 		return -1
 	}
@@ -54,10 +54,9 @@ func FindByteSequence(needle []byte, haystack []byte) (index int) {
 		case matchLen == len(needle):
 			return matchStart
 		case b == needle[matchLen]:
-			// continue checking
-			matchLen += 1
-		case b == needle[0]:
-			matchStart = idx
+			if matchLen == 0 {
+				matchStart = idx
+			}
 			matchLen += 1
 		default:
 			matchLen = 0
@@ -125,15 +124,30 @@ func main() {
 			return
 		}
 		statusPayload := response[11:]
-		// k-v section
-		// Instead of just spliting on double-null, we can look for the magic delimiter bytes
-		fmt.Printf("%s\n", string(statusPayload))
-		first, rest := readUntilDoubleNull(statusPayload)
-		fmt.Printf("%s\n", string(first))
-		second, rest := readUntilDoubleNull(rest)
-		fmt.Printf("%s\n", string(second))
-		playerSection, rest := readUntilDoubleNull(rest[10:])
-		fmt.Printf("%s\n", string(playerSection))
+		magicBytes := []byte{0x01, 0x70, 0x6C, 0x61, 0x79, 0x65, 0x72, 0x5F, 0x00, 0x00}
+		paddingIndex := FindByteSequence(magicBytes, statusPayload)
+		kVSection := statusPayload[:paddingIndex]
+		infoMap := make(map[string]string)
+		isKey := true
+		var keyVal string
+		for _, kOrV := range bytes.Split(kVSection, []byte{0x00}) {
+			if isKey {
+				keyVal = string(kOrV)
+				isKey = false
+			} else {
+				infoMap[keyVal] = string(kOrV)
+				isKey = true
+			}
+		}
+		for key, value := range infoMap {
+			fmt.Printf("%-12s%s\n", key, value)
+		}
+		playerSection := statusPayload[paddingIndex+len(magicBytes):]
+		for _, playerBytes := range bytes.Split(playerSection, []byte{0x00}) {
+			if len(playerBytes) > 0 {
+				fmt.Printf("Online      %s\n", string(playerBytes))
+			}
+		}
 	}()
 
 	select {
